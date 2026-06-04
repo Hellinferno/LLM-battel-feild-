@@ -20,7 +20,7 @@ export const imageInputSchema = z.object({
 
 export const benchmarkRunCreateSchema = z
   .object({
-    prompt: z.string().trim().max(20000).default(""),
+    prompt: z.string().trim().max(500000).default(""),
     images: z.array(imageInputSchema).max(8).default([]),
     systemInstruction: z.string().trim().max(5000).nullable().optional(),
     settings: z.object({
