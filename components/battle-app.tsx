@@ -3,6 +3,7 @@
 import {
   Activity,
   Clock3,
+  FileText,
   History,
   ImagePlus,
   KeyRound,
@@ -23,6 +24,7 @@ import type {
   ProviderKeyView,
   ProviderModelsResponse
 } from "@/lib/client/api-types";
+import { extractPdfText } from "@/lib/client/pdf";
 import { PROVIDER_LABELS } from "@/lib/providers/catalog";
 import type { BenchmarkResult, ModelSelection, Provider } from "@/lib/providers/types";
 import { PROVIDERS } from "@/lib/providers/types";
@@ -63,9 +65,54 @@ type ImageAttachment = {
 
 const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
 const MAX_IMAGES = 8;
+const MAX_DOCUMENTS = 5;
 
 // Fixed run settings — the form no longer exposes these controls.
-const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 1024, timeoutMs: 60000 };
+// Output budget is generous so full question papers aren't truncated mid-answer.
+const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 4096, timeoutMs: 60000 };
+
+// Sent as the system instruction on every run so each model finishes with a
+// machine-parseable answer block that powers the "Final answer" results column.
+const ANSWER_INSTRUCTION =
+  "Answer the user's prompt fully, showing any working you need. " +
+  "Then, at the very end of your response, add a section that begins on its own line " +
+  'with "FINAL ANSWERS:" and lists only the final answer or chosen option for each ' +
+  'question, one per line as "Q<number>: <answer>". If there is just one question, ' +
+  'write a single line "FINAL ANSWER: <answer>" instead.';
+
+type DocumentAttachment = {
+  name: string;
+  /** Plain text extracted from the PDF in the browser. */
+  text: string;
+};
+
+function buildEffectivePrompt(prompt: string, documents: DocumentAttachment[]): string {
+  if (documents.length === 0) {
+    return prompt;
+  }
+  const docs = documents
+    .map((doc) => `--- Document: ${doc.name} ---\n${doc.text}`)
+    .join("\n\n");
+  return [prompt.trim(), docs].filter((part) => part.length > 0).join("\n\n");
+}
+
+/** Pulls the trailing "FINAL ANSWER(S):" block out of a model's output. */
+function extractFinalAnswer(output: string | null): string | null {
+  if (!output) {
+    return null;
+  }
+  const marker = /final\s+answers?\s*:?/gi;
+  let last: RegExpExecArray | null = null;
+  let current: RegExpExecArray | null;
+  while ((current = marker.exec(output)) !== null) {
+    last = current;
+  }
+  if (!last) {
+    return null;
+  }
+  const tail = output.slice(last.index + last[0].length).trim();
+  return tail.length > 0 ? tail : null;
+}
 
 function readImageFile(file: File): Promise<ImageAttachment> {
   return new Promise((resolve, reject) => {
@@ -89,7 +136,10 @@ export function BattleApp() {
   const [providerForm, setProviderForm] = useState<ProviderForm>(initialProviderForm);
   const [prompt, setPrompt] = useState("Explain vector databases to a product manager.");
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
+  const [parsingPdf, setParsingPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const [selected, setSelected] = useState<Record<string, ModelSelection>>({});
   const [customModels, setCustomModels] = useState<ModelView[]>([]);
   const [liveModels, setLiveModels] = useState<ModelView[]>([]);
@@ -285,14 +335,46 @@ export function BattleApp() {
     setImages((current) => current.filter((_, i) => i !== index));
   }
 
+  async function addDocuments(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+    setMessage(null);
+    setParsingPdf(true);
+    try {
+      const loaded = await Promise.all(
+        Array.from(fileList).map(async (file) => ({
+          name: file.name,
+          text: await extractPdfText(file)
+        }))
+      );
+      const usable = loaded.filter((doc) => doc.text.trim().length > 0);
+      if (usable.length < loaded.length) {
+        setMessage("Some PDFs had no extractable text (they may be scanned images).");
+      }
+      setDocuments((current) => [...current, ...usable].slice(0, MAX_DOCUMENTS));
+    } catch (error) {
+      setMessage(readError(error));
+    } finally {
+      setParsingPdf(false);
+      if (pdfInputRef.current) {
+        pdfInputRef.current.value = "";
+      }
+    }
+  }
+
+  function removeDocument(index: number) {
+    setDocuments((current) => current.filter((_, i) => i !== index));
+  }
+
   async function runBenchmark(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (selectedModels.length === 0) {
       setMessage("Select at least one model.");
       return;
     }
-    if (prompt.trim().length === 0 && images.length === 0) {
-      setMessage("Provide a prompt, an image, or both.");
+    if (prompt.trim().length === 0 && images.length === 0 && documents.length === 0) {
+      setMessage("Provide a prompt, an image, a PDF, or a combination.");
       return;
     }
 
@@ -301,9 +383,9 @@ export function BattleApp() {
     const run = await fetchJson<BenchmarkRunView>("/api/benchmark-runs", {
       method: "POST",
       body: JSON.stringify({
-        prompt,
+        prompt: buildEffectivePrompt(prompt, documents),
         images: images.map(({ mimeType, data }) => ({ mimeType, data })),
-        systemInstruction: null,
+        systemInstruction: ANSWER_INSTRUCTION,
         settings: DEFAULT_RUN_SETTINGS,
         models: selectedModels
       })
@@ -325,6 +407,7 @@ export function BattleApp() {
     setResults(payload.results);
     setPrompt(run.prompt);
     setImages([]);
+    setDocuments([]);
     setSelected(
       Object.fromEntries(
         run.selectedModels.map((model) => [selectionKey(model.provider, model.model), model])
@@ -425,6 +508,14 @@ export function BattleApp() {
                     onRemove={removeImage}
                   />
 
+                  <DocumentInputField
+                    documents={documents}
+                    pdfInputRef={pdfInputRef}
+                    parsing={parsingPdf}
+                    onAdd={addDocuments}
+                    onRemove={removeDocument}
+                  />
+
                   <ModelSelector
                     models={allModels}
                     selected={selected}
@@ -439,8 +530,11 @@ export function BattleApp() {
                     className="focus-ring inline-flex items-center gap-2 rounded-md bg-teal px-4 py-2 text-sm font-semibold text-white hover:bg-[#066b67] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={
                       isPending ||
+                      parsingPdf ||
                       selectedModels.length === 0 ||
-                      (prompt.trim().length === 0 && images.length === 0)
+                      (prompt.trim().length === 0 &&
+                        images.length === 0 &&
+                        documents.length === 0)
                     }
                   >
                     {isPending ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
@@ -528,6 +622,82 @@ function ImageInputField({
                 onClick={() => onRemove(index)}
               >
                 <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function DocumentInputField({
+  documents,
+  pdfInputRef,
+  parsing,
+  onAdd,
+  onRemove
+}: {
+  documents: DocumentAttachment[];
+  pdfInputRef: React.RefObject<HTMLInputElement | null>;
+  parsing: boolean;
+  onAdd: (files: FileList | null) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium">PDFs</span>
+        <span className="text-xs text-muted">
+          {documents.length}/{MAX_DOCUMENTS} attached
+        </span>
+      </div>
+
+      <input
+        ref={pdfInputRef}
+        type="file"
+        accept="application/pdf"
+        multiple
+        aria-label="Attach PDFs"
+        className="hidden"
+        onChange={(event) => onAdd(event.target.files)}
+      />
+
+      <button
+        type="button"
+        className="focus-ring inline-flex items-center gap-2 rounded-md border border-dashed border-line bg-white px-3 py-2 text-sm font-medium hover:border-teal disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={parsing || documents.length >= MAX_DOCUMENTS}
+        onClick={() => pdfInputRef.current?.click()}
+      >
+        {parsing ? <Loader2 className="animate-spin" size={15} /> : <FileText size={15} />}
+        {parsing ? "Reading PDF…" : "Add PDF"}
+      </button>
+
+      <p className="mt-2 text-xs text-muted">
+        Upload a full question paper — its text is extracted and added to the prompt.
+      </p>
+
+      {documents.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {documents.map((doc, index) => (
+            <div
+              key={`${doc.name}-${index}`}
+              className="flex items-center justify-between gap-3 rounded-md border border-line px-3 py-2 text-sm"
+            >
+              <span className="flex items-center gap-2 truncate">
+                <FileText size={14} className="shrink-0 text-muted" />
+                <span className="truncate font-medium">{doc.name}</span>
+                <span className="shrink-0 text-xs text-muted">
+                  {doc.text.length.toLocaleString()} chars
+                </span>
+              </span>
+              <button
+                type="button"
+                aria-label={`Remove ${doc.name}`}
+                className="focus-ring rounded-md p-1 text-muted hover:text-danger"
+                onClick={() => onRemove(index)}
+              >
+                <X size={14} />
               </button>
             </div>
           ))}
@@ -884,6 +1054,7 @@ function ResultsTable({
             <tr className="border-b border-line text-xs uppercase text-muted">
               <th className="w-48 py-2 pr-3">Model</th>
               <th className="py-2 pr-3">Output</th>
+              <th className="w-44 py-2 pr-3">Final answer</th>
               <th className="w-28 py-2 pr-3">Time taken</th>
               <th className="w-32 py-2 pr-3">Token usage</th>
             </tr>
@@ -891,12 +1062,15 @@ function ResultsTable({
           <tbody>
             {results.length === 0 ? (
               <tr>
-                <td className="py-6 text-muted" colSpan={4}>
+                <td className="py-6 text-muted" colSpan={5}>
                   No results yet.
                 </td>
               </tr>
             ) : (
-              results.map((result) => (
+              results.map((result) => {
+                const finalAnswer =
+                  result.status === "success" ? extractFinalAnswer(result.output) : null;
+                return (
                 <tr key={`${result.provider}-${result.model}`} className="border-b border-line align-top">
                   <td className="py-3 pr-3">
                     <span className="block font-medium">{result.model}</span>
@@ -909,6 +1083,15 @@ function ResultsTable({
                       <span className="block whitespace-pre-wrap text-danger">{result.errorMessage}</span>
                     )}
                   </td>
+                  <td className="py-3 pr-3">
+                    {finalAnswer ? (
+                      <span className="block whitespace-pre-wrap font-medium text-ink">
+                        {finalAnswer}
+                      </span>
+                    ) : (
+                      <span className="text-muted">—</span>
+                    )}
+                  </td>
                   <td className="py-3 pr-3 whitespace-nowrap">{result.latencyMs} ms</td>
                   <td className="py-3 pr-3">
                     <span className="block font-medium">{formatToken(result.totalTokens)}</span>
@@ -917,7 +1100,8 @@ function ResultsTable({
                     </span>
                   </td>
                 </tr>
-              ))
+                );
+              })
             )}
           </tbody>
         </table>
