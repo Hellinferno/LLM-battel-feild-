@@ -25,6 +25,7 @@ import type {
   ProviderModelsResponse
 } from "@/lib/client/api-types";
 import { extractPdfText } from "@/lib/client/pdf";
+import { MarkdownContent } from "@/components/markdown-content";
 import { PROVIDER_LABELS } from "@/lib/providers/catalog";
 import type { BenchmarkResult, ModelSelection, Provider } from "@/lib/providers/types";
 import { PROVIDERS } from "@/lib/providers/types";
@@ -69,7 +70,10 @@ const MAX_DOCUMENTS = 5;
 
 // Fixed run settings — the form no longer exposes these controls.
 // Output budget is generous so full question papers aren't truncated mid-answer.
-const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 4096, timeoutMs: 60000 };
+// Pro-class reasoning models (e.g. gemini-2.5-pro) spend a large share of the
+// output budget on internal thinking tokens before any visible text, so we
+// allocate generously to leave room for the actual answer.
+const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 16000, timeoutMs: 60000 };
 
 // Sent as the system instruction on every run so each model finishes with a
 // machine-parseable answer block that powers the "Final answer" results column.
@@ -1078,16 +1082,18 @@ function ResultsTable({
                   </td>
                   <td className="py-3 pr-3">
                     {result.status === "success" ? (
-                      <span className="block whitespace-pre-wrap text-ink">{result.output}</span>
+                      result.output && result.output.length > 0 ? (
+                        <MarkdownContent text={result.output} className="text-ink" />
+                      ) : (
+                        <span className="block text-muted">Empty output.</span>
+                      )
                     ) : (
                       <span className="block whitespace-pre-wrap text-danger">{result.errorMessage}</span>
                     )}
                   </td>
                   <td className="py-3 pr-3">
                     {finalAnswer ? (
-                      <span className="block whitespace-pre-wrap font-medium text-ink">
-                        {finalAnswer}
-                      </span>
+                      <MarkdownContent text={finalAnswer} className="font-medium text-ink" />
                     ) : (
                       <span className="text-muted">—</span>
                     )}

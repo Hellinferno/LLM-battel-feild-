@@ -7,11 +7,13 @@ type GeminiResponse = {
     content?: {
       parts?: Array<{ text?: string }>;
     };
+    finishReason?: string;
   }>;
   usageMetadata?: {
     promptTokenCount?: number;
     candidatesTokenCount?: number;
     totalTokenCount?: number;
+    thoughtsTokenCount?: number;
   };
 };
 
@@ -71,17 +73,34 @@ async function runGemini(input: ProviderRunInput): Promise<BenchmarkResult> {
       input.settings.timeoutMs
     );
 
+    const candidate = data.candidates?.[0];
+    const output =
+      candidate?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "";
+    const finishReason = candidate?.finishReason ?? null;
+    const thoughts = data.usageMetadata?.thoughtsTokenCount ?? 0;
+
+    // Reasoning models (gemini-2.5-pro especially) can spend the full
+    // maxOutputTokens on internal thinking, returning empty visible text. Flag
+    // that explicitly so it doesn't look like a silent failure.
+    const emptyButFinished = output.length === 0 && finishReason !== null;
+    const hitCap = finishReason === "MAX_TOKENS";
+
     return {
       provider: "google_gemini",
       model: input.model,
-      output:
-        data.candidates?.[0]?.content?.parts?.map((part) => part.text ?? "").join("").trim() ?? "",
+      output,
       inputTokens: data.usageMetadata?.promptTokenCount ?? null,
       outputTokens: data.usageMetadata?.candidatesTokenCount ?? null,
       totalTokens: data.usageMetadata?.totalTokenCount ?? null,
       latencyMs,
-      status: "success",
-      errorMessage: null,
+      status: emptyButFinished ? "error" : "success",
+      errorMessage: emptyButFinished
+        ? hitCap
+          ? `Empty output — model hit maxOutputTokens (${
+              data.usageMetadata?.candidatesTokenCount ?? "?"
+            } answer / ${thoughts} thinking tokens). Try raising maxOutputTokens.`
+          : `Empty output — finishReason: ${finishReason}.`
+        : null,
       rawUsage: data.usageMetadata ?? null
     };
   } catch (error) {
