@@ -65,10 +65,22 @@ export type ProviderKeyTestResult = {
   message: string;
 };
 
+export type ProviderModelInfo = {
+  id: string;
+  displayName?: string;
+};
+
+export type ListModelsInput = {
+  apiKey: string;
+  baseUrl?: string | null;
+};
+
 export type ProviderAdapter = {
   provider: Provider;
   run(input: ProviderRunInput): Promise<BenchmarkResult>;
   testKey(input: Pick<ProviderRunInput, "apiKey" | "model" | "baseUrl">): Promise<ProviderKeyTestResult>;
+  /** Lists the models the given key can access. Optional per provider. */
+  listModels?(input: ListModelsInput): Promise<ProviderModelInfo[]>;
 };
 
 export type ModelConfigSeed = {

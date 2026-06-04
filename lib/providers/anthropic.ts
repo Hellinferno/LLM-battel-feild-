@@ -27,6 +27,17 @@ export const anthropicAdapter: ProviderAdapter = {
     return result.status === "success"
       ? { status: "connected", message: "Provider key is valid." }
       : { status: "failed", message: result.errorMessage ?? "Provider key test failed." };
+  },
+  async listModels(input) {
+    const { data } = await fetchJson<{ data?: Array<{ id: string; display_name?: string }> }>(
+      "https://api.anthropic.com/v1/models?limit=1000",
+      {
+        method: "GET",
+        headers: { "x-api-key": input.apiKey, "anthropic-version": "2023-06-01" }
+      },
+      20000
+    );
+    return (data.data ?? []).map((item) => ({ id: item.id, displayName: item.display_name }));
   }
 };
 

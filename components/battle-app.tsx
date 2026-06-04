@@ -20,7 +20,8 @@ import type {
   BenchmarkRunView,
   HistoryItem,
   ModelView,
-  ProviderKeyView
+  ProviderKeyView,
+  ProviderModelsResponse
 } from "@/lib/client/api-types";
 import { PROVIDER_LABELS } from "@/lib/providers/catalog";
 import type { BenchmarkResult, ModelSelection, Provider } from "@/lib/providers/types";
@@ -92,6 +93,8 @@ export function BattleApp() {
   const [timeoutMs, setTimeoutMs] = useState(60000);
   const [selected, setSelected] = useState<Record<string, ModelSelection>>({});
   const [customModels, setCustomModels] = useState<ModelView[]>([]);
+  const [liveModels, setLiveModels] = useState<ModelView[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
   const [activeRun, setActiveRun] = useState<BenchmarkRunView | null>(null);
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [message, setMessage] = useState<string | null>(null);
@@ -111,9 +114,48 @@ export function BattleApp() {
     });
   }, []);
 
+  const loadProviderModels = useCallback(async () => {
+    setLoadingModels(true);
+    try {
+      const data = await fetchJson<ProviderModelsResponse>("/api/provider-models");
+      const flat: ModelView[] = [];
+      const errors: string[] = [];
+
+      for (const group of data.providers) {
+        if (group.error) {
+          errors.push(`${group.providerLabel}: ${group.error}`);
+        }
+        for (const item of group.models) {
+          flat.push({
+            provider: item.provider,
+            providerLabel: group.providerLabel,
+            model: item.model,
+            displayName: item.displayName,
+            supportsTemperature: true,
+            supportsMaxOutputTokens: true,
+            enabled: true
+          });
+        }
+      }
+
+      setLiveModels(flat);
+      setMessage(
+        errors.length > 0
+          ? `Some providers could not list models — ${errors.join("; ")}`
+          : null
+      );
+    } catch (error) {
+      setMessage(readError(error));
+    } finally {
+      setLoadingModels(false);
+    }
+  }, []);
+
   useEffect(() => {
-    refresh().catch((error) => setMessage(readError(error)));
-  }, [refresh]);
+    refresh()
+      .then(() => loadProviderModels())
+      .catch((error) => setMessage(readError(error)));
+  }, [refresh, loadProviderModels]);
 
   const enabledProviders = useMemo(
     () => new Set(apiState.providerKeys.map((key) => key.provider)),
@@ -121,14 +163,35 @@ export function BattleApp() {
   );
 
   const allModels = useMemo(() => {
-    const catalogKeys = new Set(
-      apiState.models.map((model) => selectionKey(model.provider, model.model))
-    );
-    const extras = customModels.filter(
-      (model) => !catalogKeys.has(selectionKey(model.provider, model.model))
-    );
-    return [...apiState.models, ...extras];
-  }, [apiState.models, customModels]);
+    const liveProviders = new Set(liveModels.map((model) => model.provider));
+    const byKey = new Map<string, ModelView>();
+
+    // Catalog presets — shown only for providers we have NOT fetched live.
+    for (const model of apiState.models) {
+      if (liveProviders.has(model.provider)) {
+        continue;
+      }
+      byKey.set(selectionKey(model.provider, model.model), {
+        ...model,
+        enabled: model.enabled || enabledProviders.has(model.provider)
+      });
+    }
+
+    // Live models from the provider APIs are authoritative.
+    for (const model of liveModels) {
+      byKey.set(selectionKey(model.provider, model.model), model);
+    }
+
+    // User-added custom models, if not already present.
+    for (const model of customModels) {
+      const key = selectionKey(model.provider, model.model);
+      if (!byKey.has(key)) {
+        byKey.set(key, model);
+      }
+    }
+
+    return [...byKey.values()];
+  }, [apiState.models, liveModels, customModels, enabledProviders]);
 
   const selectedModels = Object.values(selected);
 
@@ -182,6 +245,7 @@ export function BattleApp() {
     });
     setProviderForm(initialProviderForm);
     await refresh();
+    await loadProviderModels();
     setMessage("Provider key saved.");
   }
 
@@ -387,6 +451,8 @@ export function BattleApp() {
                     enabledProviders={enabledProviders}
                     onChange={setSelected}
                     onAddCustomModel={addCustomModel}
+                    onReload={() => submitWithTransition(loadProviderModels)}
+                    loading={loadingModels}
                   />
 
                   <button
@@ -545,17 +611,32 @@ function ModelSelector({
   selected,
   enabledProviders,
   onChange,
-  onAddCustomModel
+  onAddCustomModel,
+  onReload,
+  loading
 }: {
   models: ModelView[];
   selected: Record<string, ModelSelection>;
   enabledProviders: Set<Provider>;
   onChange: (selected: Record<string, ModelSelection>) => void;
   onAddCustomModel: (provider: Provider, modelId: string, displayName: string) => void;
+  onReload: () => void;
+  loading: boolean;
 }) {
+  const [filter, setFilter] = useState("");
+
   const groups = useMemo(() => {
+    const needle = filter.trim().toLowerCase();
     const byProvider = new Map<Provider, ModelView[]>();
     for (const model of models) {
+      if (
+        needle &&
+        !model.model.toLowerCase().includes(needle) &&
+        !model.displayName.toLowerCase().includes(needle) &&
+        !model.providerLabel.toLowerCase().includes(needle)
+      ) {
+        continue;
+      }
       const list = byProvider.get(model.provider) ?? [];
       list.push(model);
       byProvider.set(model.provider, list);
@@ -564,7 +645,7 @@ function ModelSelector({
       const list = byProvider.get(provider);
       return list ? [{ provider, models: list }] : [];
     });
-  }, [models]);
+  }, [models, filter]);
 
   function toggle(model: ModelView, checked: boolean) {
     const key = selectionKey(model.provider, model.model);
@@ -579,10 +660,25 @@ function ModelSelector({
 
   return (
     <div>
-      <div className="mb-2 flex items-center justify-between">
+      <div className="mb-2 flex items-center justify-between gap-3">
         <h4 className="text-sm font-semibold">Models</h4>
-        <span className="text-xs text-muted">Pick any models per provider. Save a key to enable.</span>
+        <button
+          type="button"
+          className="focus-ring inline-flex items-center gap-1.5 rounded-md border border-line bg-white px-2.5 py-1.5 text-xs font-medium hover:border-teal disabled:opacity-60"
+          onClick={onReload}
+          disabled={loading}
+        >
+          {loading ? <Loader2 className="animate-spin" size={13} /> : <RefreshCw size={13} />}
+          Load models from your APIs
+        </button>
       </div>
+
+      <input
+        className="focus-ring mb-3 w-full rounded-md border border-line px-3 py-2 text-sm"
+        placeholder="Search models…"
+        value={filter}
+        onChange={(event) => setFilter(event.target.value)}
+      />
 
       <div className="space-y-4">
         {groups.map((group) => {

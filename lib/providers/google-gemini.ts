@@ -32,6 +32,17 @@ export const googleGeminiAdapter: ProviderAdapter = {
     return result.status === "success"
       ? { status: "connected", message: "Provider key is valid." }
       : { status: "failed", message: result.errorMessage ?? "Provider key test failed." };
+  },
+  async listModels(input) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models?pageSize=1000&key=${encodeURIComponent(
+      input.apiKey
+    )}`;
+    const { data } = await fetchJson<{
+      models?: Array<{ name: string; displayName?: string; supportedGenerationMethods?: string[] }>;
+    }>(url, { method: "GET" }, 20000);
+    return (data.models ?? [])
+      .filter((item) => item.supportedGenerationMethods?.includes("generateContent"))
+      .map((item) => ({ id: item.name.replace(/^models\//, ""), displayName: item.displayName }));
   }
 };
 

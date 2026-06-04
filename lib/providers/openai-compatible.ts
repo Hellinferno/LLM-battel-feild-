@@ -46,6 +46,26 @@ export function createOpenAICompatibleAdapter(provider: Provider): ProviderAdapt
       return result.status === "success"
         ? { status: "connected", message: "Provider key is valid." }
         : { status: "failed", message: result.errorMessage ?? "Provider key test failed." };
+    },
+    async listModels(input) {
+      const baseUrl = normalizeBaseUrl(input.baseUrl || BASE_URLS[provider]);
+      const { data } = await fetchJson<{ data?: Array<{ id: string; name?: string }> }>(
+        `${baseUrl}/models`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${input.apiKey}`,
+            ...(provider === "openrouter"
+              ? {
+                  "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
+                  "X-Title": "LLM Battle"
+                }
+              : {})
+          }
+        },
+        20000
+      );
+      return (data.data ?? []).map((item) => ({ id: item.id, displayName: item.name }));
     }
   };
 }

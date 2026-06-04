@@ -31,6 +31,16 @@ export const openAIAdapter: ProviderAdapter = {
     return result.status === "success"
       ? { status: "connected", message: "Provider key is valid." }
       : { status: "failed", message: result.errorMessage ?? "Provider key test failed." };
+  },
+  async listModels(input) {
+    const { data } = await fetchJson<{ data?: Array<{ id: string }> }>(
+      "https://api.openai.com/v1/models",
+      { method: "GET", headers: { Authorization: `Bearer ${input.apiKey}` } },
+      20000
+    );
+    return (data.data ?? [])
+      .filter((item) => /^(gpt-|o1|o3|o4|chatgpt)/i.test(item.id))
+      .map((item) => ({ id: item.id }));
   }
 };
 

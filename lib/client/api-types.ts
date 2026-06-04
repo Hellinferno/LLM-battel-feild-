@@ -21,6 +21,18 @@ export type ModelView = {
   enabled: boolean;
 };
 
+export type ProviderModelGroup = {
+  provider: Provider;
+  providerLabel: string;
+  label: string | null;
+  models: Array<{ provider: Provider; model: string; displayName: string }>;
+  error: string | null;
+};
+
+export type ProviderModelsResponse = {
+  providers: ProviderModelGroup[];
+};
+
 export type BenchmarkRunView = {
   id: string;
   prompt: string;
