@@ -64,6 +64,9 @@ type ImageAttachment = {
 const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
 const MAX_IMAGES = 8;
 
+// Fixed run settings — the form no longer exposes these controls.
+const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 1024, timeoutMs: 60000 };
+
 function readImageFile(file: File): Promise<ImageAttachment> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -87,10 +90,6 @@ export function BattleApp() {
   const [prompt, setPrompt] = useState("Explain vector databases to a product manager.");
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [systemInstruction, setSystemInstruction] = useState("Be clear, concise, and practical.");
-  const [temperature, setTemperature] = useState(0.4);
-  const [maxOutputTokens, setMaxOutputTokens] = useState(700);
-  const [timeoutMs, setTimeoutMs] = useState(60000);
   const [selected, setSelected] = useState<Record<string, ModelSelection>>({});
   const [customModels, setCustomModels] = useState<ModelView[]>([]);
   const [liveModels, setLiveModels] = useState<ModelView[]>([]);
@@ -304,8 +303,8 @@ export function BattleApp() {
       body: JSON.stringify({
         prompt,
         images: images.map(({ mimeType, data }) => ({ mimeType, data })),
-        systemInstruction: systemInstruction || null,
-        settings: { temperature, maxOutputTokens, timeoutMs },
+        systemInstruction: null,
+        settings: DEFAULT_RUN_SETTINGS,
         models: selectedModels
       })
     });
@@ -326,10 +325,6 @@ export function BattleApp() {
     setResults(payload.results);
     setPrompt(run.prompt);
     setImages([]);
-    setSystemInstruction(run.systemInstruction ?? "");
-    setTemperature(run.settings.temperature ?? 0.4);
-    setMaxOutputTokens(run.settings.maxOutputTokens ?? 700);
-    setTimeoutMs(run.settings.timeoutMs);
     setSelected(
       Object.fromEntries(
         run.selectedModels.map((model) => [selectionKey(model.provider, model.model), model])
@@ -429,21 +424,6 @@ export function BattleApp() {
                     onAdd={addImages}
                     onRemove={removeImage}
                   />
-
-                  <label className="block">
-                    <span className="text-sm font-medium">System instruction</span>
-                    <input
-                      className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
-                      value={systemInstruction}
-                      onChange={(event) => setSystemInstruction(event.target.value)}
-                    />
-                  </label>
-
-                  <div className="grid gap-3 md:grid-cols-3">
-                    <NumberField label="Temperature" value={temperature} min={0} max={2} step={0.1} onChange={setTemperature} />
-                    <NumberField label="Max tokens" value={maxOutputTokens} min={1} max={32000} step={50} onChange={setMaxOutputTokens} />
-                    <NumberField label="Timeout ms" value={timeoutMs} min={1000} max={180000} step={1000} onChange={setTimeoutMs} />
-                  </div>
 
                   <ModelSelector
                     models={allModels}
@@ -575,36 +555,6 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-function NumberField({
-  label,
-  value,
-  min,
-  max,
-  step,
-  onChange
-}: {
-  label: string;
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <label className="block">
-      <span className="text-sm font-medium">{label}</span>
-      <input
-        type="number"
-        className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
-        value={value}
-        min={min}
-        max={max}
-        step={step}
-        onChange={(event) => onChange(Number(event.target.value))}
-      />
-    </label>
-  );
-}
 
 function ModelSelector({
   models,
@@ -929,38 +879,42 @@ function ResultsTable({
       </div>
 
       <div className="overflow-x-auto">
-        <table className="w-full min-w-[900px] border-collapse text-left text-sm">
+        <table className="w-full min-w-[640px] border-collapse text-left text-sm">
           <thead>
             <tr className="border-b border-line text-xs uppercase text-muted">
-              <th className="py-2 pr-3">Provider</th>
-              <th className="py-2 pr-3">Model</th>
-              <th className="py-2 pr-3">Status</th>
-              <th className="py-2 pr-3">Latency</th>
-              <th className="py-2 pr-3">Input</th>
+              <th className="w-48 py-2 pr-3">Model</th>
               <th className="py-2 pr-3">Output</th>
-              <th className="py-2 pr-3">Total</th>
-              <th className="py-2 pr-3">Preview</th>
+              <th className="w-28 py-2 pr-3">Time taken</th>
+              <th className="w-32 py-2 pr-3">Token usage</th>
             </tr>
           </thead>
           <tbody>
             {results.length === 0 ? (
               <tr>
-                <td className="py-6 text-muted" colSpan={8}>
+                <td className="py-6 text-muted" colSpan={4}>
                   No results yet.
                 </td>
               </tr>
             ) : (
               results.map((result) => (
                 <tr key={`${result.provider}-${result.model}`} className="border-b border-line align-top">
-                  <td className="py-3 pr-3 font-medium">{PROVIDER_LABELS[result.provider]}</td>
-                  <td className="py-3 pr-3 text-muted">{result.model}</td>
-                  <td className="py-3 pr-3"><Status status={result.status} /></td>
-                  <td className="py-3 pr-3">{result.latencyMs} ms</td>
-                  <td className="py-3 pr-3">{formatToken(result.inputTokens)}</td>
-                  <td className="py-3 pr-3">{formatToken(result.outputTokens)}</td>
-                  <td className="py-3 pr-3">{formatToken(result.totalTokens)}</td>
-                  <td className="max-w-md py-3 pr-3 text-muted">
-                    {result.status === "success" ? result.output : result.errorMessage}
+                  <td className="py-3 pr-3">
+                    <span className="block font-medium">{result.model}</span>
+                    <span className="block text-xs text-muted">{PROVIDER_LABELS[result.provider]}</span>
+                  </td>
+                  <td className="py-3 pr-3">
+                    {result.status === "success" ? (
+                      <span className="block whitespace-pre-wrap text-ink">{result.output}</span>
+                    ) : (
+                      <span className="block whitespace-pre-wrap text-danger">{result.errorMessage}</span>
+                    )}
+                  </td>
+                  <td className="py-3 pr-3 whitespace-nowrap">{result.latencyMs} ms</td>
+                  <td className="py-3 pr-3">
+                    <span className="block font-medium">{formatToken(result.totalTokens)}</span>
+                    <span className="block text-xs text-muted">
+                      in {formatToken(result.inputTokens)} · out {formatToken(result.outputTokens)}
+                    </span>
                   </td>
                 </tr>
               ))
