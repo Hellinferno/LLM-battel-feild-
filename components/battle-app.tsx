@@ -91,6 +91,7 @@ export function BattleApp() {
   const [maxOutputTokens, setMaxOutputTokens] = useState(700);
   const [timeoutMs, setTimeoutMs] = useState(60000);
   const [selected, setSelected] = useState<Record<string, ModelSelection>>({});
+  const [customModels, setCustomModels] = useState<ModelView[]>([]);
   const [activeRun, setActiveRun] = useState<BenchmarkRunView | null>(null);
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [message, setMessage] = useState<string | null>(null);
@@ -119,7 +120,52 @@ export function BattleApp() {
     [apiState.providerKeys]
   );
 
+  const allModels = useMemo(() => {
+    const catalogKeys = new Set(
+      apiState.models.map((model) => selectionKey(model.provider, model.model))
+    );
+    const extras = customModels.filter(
+      (model) => !catalogKeys.has(selectionKey(model.provider, model.model))
+    );
+    return [...apiState.models, ...extras];
+  }, [apiState.models, customModels]);
+
   const selectedModels = Object.values(selected);
+
+  function addCustomModel(provider: Provider, modelId: string, displayName: string) {
+    const trimmedModel = modelId.trim();
+    if (trimmedModel.length === 0) {
+      setMessage("Enter a model ID to add.");
+      return;
+    }
+
+    const key = selectionKey(provider, trimmedModel);
+    setCustomModels((current) => {
+      if (
+        current.some((model) => selectionKey(model.provider, model.model) === key) ||
+        apiState.models.some((model) => selectionKey(model.provider, model.model) === key)
+      ) {
+        return current;
+      }
+      return [
+        ...current,
+        {
+          provider,
+          providerLabel: PROVIDER_LABELS[provider],
+          model: trimmedModel,
+          displayName: displayName.trim() || trimmedModel,
+          supportsTemperature: true,
+          supportsMaxOutputTokens: true,
+          enabled: enabledProviders.has(provider)
+        }
+      ];
+    });
+    setSelected((current) => ({
+      ...current,
+      [key]: { provider, model: trimmedModel }
+    }));
+    setMessage(null);
+  }
 
   async function addProviderKey(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -336,10 +382,11 @@ export function BattleApp() {
                   </div>
 
                   <ModelSelector
-                    models={apiState.models}
+                    models={allModels}
                     selected={selected}
                     enabledProviders={enabledProviders}
                     onChange={setSelected}
+                    onAddCustomModel={addCustomModel}
                   />
 
                   <button
@@ -497,56 +544,159 @@ function ModelSelector({
   models,
   selected,
   enabledProviders,
-  onChange
+  onChange,
+  onAddCustomModel
 }: {
   models: ModelView[];
   selected: Record<string, ModelSelection>;
   enabledProviders: Set<Provider>;
   onChange: (selected: Record<string, ModelSelection>) => void;
+  onAddCustomModel: (provider: Provider, modelId: string, displayName: string) => void;
 }) {
+  const groups = useMemo(() => {
+    const byProvider = new Map<Provider, ModelView[]>();
+    for (const model of models) {
+      const list = byProvider.get(model.provider) ?? [];
+      list.push(model);
+      byProvider.set(model.provider, list);
+    }
+    return PROVIDERS.flatMap((provider) => {
+      const list = byProvider.get(provider);
+      return list ? [{ provider, models: list }] : [];
+    });
+  }, [models]);
+
+  function toggle(model: ModelView, checked: boolean) {
+    const key = selectionKey(model.provider, model.model);
+    const next = { ...selected };
+    if (checked) {
+      next[key] = { provider: model.provider, model: model.model };
+    } else {
+      delete next[key];
+    }
+    onChange(next);
+  }
+
   return (
     <div>
       <div className="mb-2 flex items-center justify-between">
         <h4 className="text-sm font-semibold">Models</h4>
-        <span className="text-xs text-muted">Save provider keys to enable execution.</span>
+        <span className="text-xs text-muted">Pick any models per provider. Save a key to enable.</span>
       </div>
-      <div className="grid gap-2 md:grid-cols-2">
-        {models.map((model) => {
-          const key = selectionKey(model.provider, model.model);
-          const enabled = model.enabled || enabledProviders.has(model.provider);
-          const checked = Boolean(selected[key]);
+
+      <div className="space-y-4">
+        {groups.map((group) => {
+          const providerEnabled = enabledProviders.has(group.provider);
           return (
-            <label
-              key={key}
-              className={`flex items-start gap-3 rounded-md border px-3 py-3 text-sm ${
-                enabled ? "border-line bg-white" : "border-line bg-slate-50 text-muted"
-              }`}
-            >
-              <input
-                type="checkbox"
-                className="mt-1 h-4 w-4 accent-teal"
-                disabled={!enabled}
-                checked={checked}
-                onChange={(event) => {
-                  const next = { ...selected };
-                  if (event.target.checked) {
-                    next[key] = { provider: model.provider, model: model.model };
-                  } else {
-                    delete next[key];
-                  }
-                  onChange(next);
-                }}
-              />
-              <span>
-                <span className="block font-medium">{model.displayName}</span>
-                <span className="block text-xs text-muted">
-                  {model.providerLabel} / {model.model}
+            <div key={group.provider}>
+              <div className="mb-1.5 flex items-center gap-2">
+                <span className="text-xs font-semibold uppercase tracking-wide text-muted">
+                  {PROVIDER_LABELS[group.provider]}
                 </span>
-              </span>
-            </label>
+                {!providerEnabled ? (
+                  <span className="text-[11px] text-muted">(add key to enable)</span>
+                ) : null}
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                {group.models.map((model) => {
+                  const key = selectionKey(model.provider, model.model);
+                  const enabled = model.enabled || providerEnabled;
+                  const checked = Boolean(selected[key]);
+                  return (
+                    <label
+                      key={key}
+                      className={`flex items-start gap-3 rounded-md border px-3 py-2.5 text-sm ${
+                        enabled ? "border-line bg-white" : "border-line bg-slate-50 text-muted"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        className="mt-1 h-4 w-4 accent-teal"
+                        disabled={!enabled}
+                        checked={checked}
+                        onChange={(event) => toggle(model, event.target.checked)}
+                      />
+                      <span>
+                        <span className="block font-medium">{model.displayName}</span>
+                        <span className="block text-xs text-muted">{model.model}</span>
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
           );
         })}
       </div>
+
+      <CustomModelForm onAdd={onAddCustomModel} />
+    </div>
+  );
+}
+
+function CustomModelForm({
+  onAdd
+}: {
+  onAdd: (provider: Provider, modelId: string, displayName: string) => void;
+}) {
+  const [provider, setProvider] = useState<Provider>("openai");
+  const [modelId, setModelId] = useState("");
+  const [displayName, setDisplayName] = useState("");
+
+  function submit() {
+    onAdd(provider, modelId, displayName);
+    setModelId("");
+    setDisplayName("");
+  }
+
+  return (
+    <div className="mt-4 rounded-md border border-dashed border-line bg-slate-50 p-3">
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted">
+        Add a custom model
+      </div>
+      <div className="grid gap-2 md:grid-cols-[150px_1fr_1fr_auto]">
+        <select
+          aria-label="Custom model provider"
+          className="focus-ring rounded-md border border-line px-2 py-2 text-sm"
+          value={provider}
+          onChange={(event) => setProvider(event.target.value as Provider)}
+        >
+          {providerOptions.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+        <input
+          className="focus-ring rounded-md border border-line px-3 py-2 text-sm"
+          placeholder="Model ID (e.g. gemini-2.5-pro)"
+          value={modelId}
+          onChange={(event) => setModelId(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              submit();
+            }
+          }}
+        />
+        <input
+          className="focus-ring rounded-md border border-line px-3 py-2 text-sm"
+          placeholder="Display name (optional)"
+          value={displayName}
+          onChange={(event) => setDisplayName(event.target.value)}
+        />
+        <button
+          type="button"
+          className="focus-ring inline-flex items-center justify-center gap-1 rounded-md border border-line bg-white px-3 py-2 text-sm font-medium hover:border-teal disabled:opacity-60"
+          disabled={modelId.trim().length === 0}
+          onClick={submit}
+        >
+          Add
+        </button>
+      </div>
+      <p className="mt-2 text-xs text-muted">
+        Use any model ID your provider supports. It will be selected automatically.
+      </p>
     </div>
   );
 }
