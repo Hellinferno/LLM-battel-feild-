@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  providerKeys  ProviderKey[]
+  benchmarkRuns BenchmarkRun[]
+}
+
+model ProviderKey {
+  id            String    @id @default(cuid())
+  userId        String
+  provider      String
+  label         String?
+  baseUrl       String?
+  encryptedKey  String
+  keyHint       String
+  status        String    @default("untested")
+  lastTestedAt  DateTime?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, provider, label])
+  @@index([userId, provider])
+}
+
+model ModelConfig {
+  id                      String   @id @default(cuid())
+  provider                String
+  model                   String
+  displayName             String
+  supportsTemperature     Boolean  @default(true)
+  supportsMaxOutputTokens Boolean  @default(true)
+  isActive                Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@unique([provider, model])
+  @@index([provider, isActive])
+}
+
+model BenchmarkRun {
+  id                String    @id @default(cuid())
+  userId            String
+  prompt            String
+  systemInstruction String?
+  settings          String
+  status            String    @default("pending")
+  selectedModels    String
+  createdAt         DateTime  @default(now())
+  completedAt       DateTime?
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  results BenchmarkResult[]
+
+  @@index([userId, createdAt])
+}
+
+model BenchmarkResult {
+  id             String   @id @default(cuid())
+  benchmarkRunId String
+  provider       String
+  model          String
+  output         String?
+  inputTokens    Int?
+  outputTokens   Int?
+  totalTokens    Int?
+  latencyMs      Int
+  status         String
+  errorMessage   String?
+  resultOrder    Int
+  rawUsage       String?
+  createdAt      DateTime @default(now())
+
+  benchmarkRun BenchmarkRun @relation(fields: [benchmarkRunId], references: [id], onDelete: Cascade)
+
+  @@unique([benchmarkRunId, resultOrder])
+  @@index([benchmarkRunId, resultOrder])
+  @@index([provider, model])
+}
+
