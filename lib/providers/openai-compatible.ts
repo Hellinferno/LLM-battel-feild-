@@ -1,4 +1,5 @@
 import { errorResult, fetchJson } from "./http";
+import { openAIChatContent } from "./multimodal";
 import type { BenchmarkResult, Provider, ProviderAdapter, ProviderRunInput } from "./types";
 
 type ChatResponse = {
@@ -73,7 +74,7 @@ async function runOpenAICompatible(input: ProviderRunInput): Promise<BenchmarkRe
             ...(input.systemInstruction
               ? [{ role: "system", content: input.systemInstruction }]
               : []),
-            { role: "user", content: input.prompt }
+            { role: "user", content: openAIChatContent(input.prompt, input.images) }
           ],
           temperature: input.settings.temperature,
           max_tokens: input.settings.maxOutputTokens

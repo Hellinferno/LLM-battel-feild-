@@ -4,15 +4,17 @@ import {
   Activity,
   Clock3,
   History,
+  ImagePlus,
   KeyRound,
   Loader2,
   Play,
   RefreshCw,
   Settings2,
   Trash2,
+  X,
   Zap
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import type {
   BenchmarkResultsPayload,
   BenchmarkRunView,
@@ -49,6 +51,31 @@ const providerOptions = PROVIDERS.map((provider) => ({
   label: PROVIDER_LABELS[provider]
 }));
 
+type ImageAttachment = {
+  name: string;
+  mimeType: string;
+  /** Base64 payload without the data: URL prefix. */
+  data: string;
+  /** Full data URL, used only for the on-screen preview. */
+  dataUrl: string;
+};
+
+const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
+const MAX_IMAGES = 8;
+
+function readImageFile(file: File): Promise<ImageAttachment> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = String(reader.result);
+      const data = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
+      resolve({ name: file.name, mimeType: file.type, data, dataUrl });
+    };
+    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
+    reader.readAsDataURL(file);
+  });
+}
+
 export function BattleApp() {
   const [apiState, setApiState] = useState<ApiState>({
     providerKeys: [],
@@ -57,6 +84,8 @@ export function BattleApp() {
   });
   const [providerForm, setProviderForm] = useState<ProviderForm>(initialProviderForm);
   const [prompt, setPrompt] = useState("Explain vector databases to a product manager.");
+  const [images, setImages] = useState<ImageAttachment[]>([]);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [systemInstruction, setSystemInstruction] = useState("Be clear, concise, and practical.");
   const [temperature, setTemperature] = useState(0.4);
   const [maxOutputTokens, setMaxOutputTokens] = useState(700);
@@ -126,10 +155,35 @@ export function BattleApp() {
     setMessage(result.message);
   }
 
+  async function addImages(fileList: FileList | null) {
+    if (!fileList || fileList.length === 0) {
+      return;
+    }
+    setMessage(null);
+    try {
+      const loaded = await Promise.all(Array.from(fileList).map(readImageFile));
+      setImages((current) => [...current, ...loaded].slice(0, MAX_IMAGES));
+    } catch (error) {
+      setMessage(readError(error));
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = "";
+      }
+    }
+  }
+
+  function removeImage(index: number) {
+    setImages((current) => current.filter((_, i) => i !== index));
+  }
+
   async function runBenchmark(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (selectedModels.length === 0) {
       setMessage("Select at least one model.");
+      return;
+    }
+    if (prompt.trim().length === 0 && images.length === 0) {
+      setMessage("Provide a prompt, an image, or both.");
       return;
     }
 
@@ -139,6 +193,7 @@ export function BattleApp() {
       method: "POST",
       body: JSON.stringify({
         prompt,
+        images: images.map(({ mimeType, data }) => ({ mimeType, data })),
         systemInstruction: systemInstruction || null,
         settings: { temperature, maxOutputTokens, timeoutMs },
         models: selectedModels
@@ -160,6 +215,7 @@ export function BattleApp() {
     setActiveRun(run);
     setResults(payload.results);
     setPrompt(run.prompt);
+    setImages([]);
     setSystemInstruction(run.systemInstruction ?? "");
     setTemperature(run.settings.temperature ?? 0.4);
     setMaxOutputTokens(run.settings.maxOutputTokens ?? 700);
@@ -248,12 +304,21 @@ export function BattleApp() {
                 >
                   <label className="block">
                     <span className="text-sm font-medium">Prompt</span>
+                    <span className="ml-1 text-xs text-muted">(text, image, or both)</span>
                     <textarea
                       className="focus-ring mt-2 min-h-28 w-full resize-y rounded-md border border-line px-3 py-3 text-sm leading-6"
                       value={prompt}
+                      placeholder="Type a prompt, attach an image, or do both."
                       onChange={(event) => setPrompt(event.target.value)}
                     />
                   </label>
+
+                  <ImageInputField
+                    images={images}
+                    fileInputRef={fileInputRef}
+                    onAdd={addImages}
+                    onRemove={removeImage}
+                  />
 
                   <label className="block">
                     <span className="text-sm font-medium">System instruction</span>
@@ -279,7 +344,11 @@ export function BattleApp() {
 
                   <button
                     className="focus-ring inline-flex items-center gap-2 rounded-md bg-teal px-4 py-2 text-sm font-semibold text-white hover:bg-[#066b67] disabled:cursor-not-allowed disabled:opacity-60"
-                    disabled={isPending || selectedModels.length === 0 || prompt.trim().length === 0}
+                    disabled={
+                      isPending ||
+                      selectedModels.length === 0 ||
+                      (prompt.trim().length === 0 && images.length === 0)
+                    }
                   >
                     {isPending ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
                     Run comparison
@@ -307,6 +376,71 @@ export function BattleApp() {
         </section>
       </div>
     </main>
+  );
+}
+
+function ImageInputField({
+  images,
+  fileInputRef,
+  onAdd,
+  onRemove
+}: {
+  images: ImageAttachment[];
+  fileInputRef: React.RefObject<HTMLInputElement | null>;
+  onAdd: (files: FileList | null) => void;
+  onRemove: (index: number) => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center justify-between">
+        <span className="text-sm font-medium">Images</span>
+        <span className="text-xs text-muted">
+          {images.length}/{MAX_IMAGES} attached
+        </span>
+      </div>
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_IMAGE_TYPES}
+        multiple
+        aria-label="Attach images"
+        className="hidden"
+        onChange={(event) => onAdd(event.target.files)}
+      />
+
+      <button
+        type="button"
+        className="focus-ring inline-flex items-center gap-2 rounded-md border border-dashed border-line bg-white px-3 py-2 text-sm font-medium hover:border-teal disabled:cursor-not-allowed disabled:opacity-60"
+        disabled={images.length >= MAX_IMAGES}
+        onClick={() => fileInputRef.current?.click()}
+      >
+        <ImagePlus size={15} />
+        Add image
+      </button>
+
+      {images.length > 0 ? (
+        <div className="mt-3 flex flex-wrap gap-3">
+          {images.map((image, index) => (
+            <div
+              key={`${image.name}-${index}`}
+              className="relative h-20 w-20 overflow-hidden rounded-md border border-line"
+            >
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                aria-label={`Remove ${image.name}`}
+                className="focus-ring absolute right-1 top-1 rounded-full bg-ink/80 p-0.5 text-white hover:bg-ink"
+                onClick={() => onRemove(index)}
+              >
+                <X size={12} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
   );
 }
 

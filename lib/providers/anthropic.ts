@@ -1,4 +1,5 @@
 import { errorResult, fetchJson } from "./http";
+import { anthropicContent } from "./multimodal";
 import type { BenchmarkResult, ProviderAdapter, ProviderRunInput } from "./types";
 
 type AnthropicResponse = {
@@ -44,7 +45,7 @@ async function runAnthropic(input: ProviderRunInput): Promise<BenchmarkResult> {
         body: JSON.stringify({
           model: input.model,
           system: input.systemInstruction ?? undefined,
-          messages: [{ role: "user", content: input.prompt }],
+          messages: [{ role: "user", content: anthropicContent(input.prompt, input.images) }],
           temperature: input.settings.temperature,
           max_tokens: input.settings.maxOutputTokens ?? 1024
         })

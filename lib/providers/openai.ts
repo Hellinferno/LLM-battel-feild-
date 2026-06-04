@@ -1,4 +1,5 @@
 import { errorResult, fetchJson } from "./http";
+import { openAIResponsesContent } from "./multimodal";
 import type { BenchmarkResult, ProviderAdapter, ProviderRunInput } from "./types";
 
 type ResponsesApiResponse = {
@@ -50,7 +51,7 @@ async function runOpenAI(input: ProviderRunInput): Promise<BenchmarkResult> {
             ...(input.systemInstruction
               ? [{ role: "system", content: input.systemInstruction }]
               : []),
-            { role: "user", content: input.prompt }
+            { role: "user", content: openAIResponsesContent(input.prompt, input.images) }
           ],
           temperature: input.settings.temperature,
           max_output_tokens: input.settings.maxOutputTokens

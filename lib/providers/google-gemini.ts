@@ -1,4 +1,5 @@
 import { errorResult, fetchJson } from "./http";
+import { geminiParts } from "./multimodal";
 import type { BenchmarkResult, ProviderAdapter, ProviderRunInput } from "./types";
 
 type GeminiResponse = {
@@ -49,7 +50,7 @@ async function runGemini(input: ProviderRunInput): Promise<BenchmarkResult> {
           systemInstruction: input.systemInstruction
             ? { parts: [{ text: input.systemInstruction }] }
             : undefined,
-          contents: [{ role: "user", parts: [{ text: input.prompt }] }],
+          contents: [{ role: "user", parts: geminiParts(input.prompt, input.images) }],
           generationConfig: {
             temperature: input.settings.temperature,
             maxOutputTokens: input.settings.maxOutputTokens

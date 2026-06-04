@@ -73,7 +73,8 @@ export async function POST(request: Request) {
       prompt: body.prompt,
       systemInstruction: body.systemInstruction ?? null,
       settings: body.settings,
-      models: body.models
+      models: body.models,
+      images: body.images
     };
 
     const keyCheck = await validateBenchmarkKeys(user.id, body.models);

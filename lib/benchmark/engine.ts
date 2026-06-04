@@ -97,7 +97,8 @@ async function runSelection(
     baseUrl: selection.baseUrl ?? credential.baseUrl,
     prompt: input.prompt,
     systemInstruction: input.systemInstruction,
-    settings: input.settings
+    settings: input.settings,
+    images: input.images
   });
 }
 

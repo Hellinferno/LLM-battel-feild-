@@ -1,4 +1,9 @@
-import type { BenchmarkResult, BenchmarkSettings, ModelSelection } from "@/lib/providers/types";
+import type {
+  BenchmarkResult,
+  BenchmarkSettings,
+  ImageInput,
+  ModelSelection
+} from "@/lib/providers/types";
 
 export type BenchmarkRunInput = {
   userId: string;
@@ -6,6 +11,7 @@ export type BenchmarkRunInput = {
   systemInstruction: string | null;
   settings: BenchmarkSettings;
   models: ModelSelection[];
+  images: ImageInput[];
 };
 
 export type OrderedBenchmarkResult = BenchmarkResult & {

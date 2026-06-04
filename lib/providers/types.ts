@@ -29,6 +29,13 @@ export type ModelSelection = {
   baseUrl?: string | null;
 };
 
+export type ImageInput = {
+  /** MIME type, e.g. "image/png". */
+  mimeType: string;
+  /** Base64-encoded image bytes, without the `data:` URL prefix. */
+  data: string;
+};
+
 export type BenchmarkResult = {
   provider: Provider;
   model: string;
@@ -50,6 +57,7 @@ export type ProviderRunInput = {
   model: string;
   provider: Provider;
   baseUrl?: string | null;
+  images?: ImageInput[];
 };
 
 export type ProviderKeyTestResult = {
