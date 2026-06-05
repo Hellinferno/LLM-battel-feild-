@@ -140,6 +140,9 @@ export function BattleApp() {
   const [providerForm, setProviderForm] = useState<ProviderForm>(initialProviderForm);
   const [prompt, setPrompt] = useState("Explain vector databases to a product manager.");
   const [images, setImages] = useState<ImageAttachment[]>([]);
+  const [sequentialImages, setSequentialImages] = useState(false);
+  const [imageIndex, setImageIndex] = useState(0);
+  const [sequentialActive, setSequentialActive] = useState(false);
   const [documents, setDocuments] = useState<DocumentAttachment[]>([]);
   const [parsingPdf, setParsingPdf] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -326,6 +329,8 @@ export function BattleApp() {
     try {
       const loaded = await Promise.all(Array.from(fileList).map(readImageFile));
       setImages((current) => [...current, ...loaded].slice(0, MAX_IMAGES));
+      setImageIndex(0);
+      setSequentialActive(false);
     } catch (error) {
       setMessage(readError(error));
     } finally {
@@ -337,6 +342,8 @@ export function BattleApp() {
 
   function removeImage(index: number) {
     setImages((current) => current.filter((_, i) => i !== index));
+    setImageIndex(0);
+    setSequentialActive(false);
   }
 
   async function addDocuments(fileList: FileList | null) {
@@ -371,24 +378,14 @@ export function BattleApp() {
     setDocuments((current) => current.filter((_, i) => i !== index));
   }
 
-  async function runBenchmark(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (selectedModels.length === 0) {
-      setMessage("Select at least one model.");
-      return;
-    }
-    if (prompt.trim().length === 0 && images.length === 0 && documents.length === 0) {
-      setMessage("Provide a prompt, an image, a PDF, or a combination.");
-      return;
-    }
-
+  async function runComparison(imagesToSend: ImageAttachment[]) {
     setMessage(null);
     setResults([]);
     const run = await fetchJson<BenchmarkRunView>("/api/benchmark-runs", {
       method: "POST",
       body: JSON.stringify({
         prompt: buildEffectivePrompt(prompt, documents),
-        images: images.map(({ mimeType, data }) => ({ mimeType, data })),
+        images: imagesToSend.map(({ mimeType, data }) => ({ mimeType, data })),
         systemInstruction: ANSWER_INSTRUCTION,
         settings: DEFAULT_RUN_SETTINGS,
         models: selectedModels
@@ -401,6 +398,36 @@ export function BattleApp() {
     await refresh();
   }
 
+  async function runBenchmark(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (selectedModels.length === 0) {
+      setMessage("Select at least one model.");
+      return;
+    }
+    if (prompt.trim().length === 0 && images.length === 0 && documents.length === 0) {
+      setMessage("Provide a prompt, an image, a PDF, or a combination.");
+      return;
+    }
+
+    if (sequentialImages && images.length > 0) {
+      setSequentialActive(true);
+      setImageIndex(0);
+      await runComparison([images[0]]);
+    } else {
+      setSequentialActive(false);
+      await runComparison(images);
+    }
+  }
+
+  async function runNextImage() {
+    const next = imageIndex + 1;
+    if (next >= images.length) {
+      return;
+    }
+    setImageIndex(next);
+    await runComparison([images[next]]);
+  }
+
   async function openHistory(id: string) {
     setMessage(null);
     const [run, payload] = await Promise.all([
@@ -411,6 +438,8 @@ export function BattleApp() {
     setResults(payload.results);
     setPrompt(run.prompt);
     setImages([]);
+    setImageIndex(0);
+    setSequentialActive(false);
     setDocuments([]);
     setSelected(
       Object.fromEntries(
@@ -510,6 +539,10 @@ export function BattleApp() {
                     fileInputRef={fileInputRef}
                     onAdd={addImages}
                     onRemove={removeImage}
+                    sequential={sequentialImages}
+                    onToggleSequential={setSequentialImages}
+                    sequentialActive={sequentialActive}
+                    currentIndex={imageIndex}
                   />
 
                   <DocumentInputField
@@ -548,6 +581,28 @@ export function BattleApp() {
               </section>
 
               <ResultsTable activeRun={activeRun} results={results} />
+
+              {sequentialActive && images.length > 0 ? (
+                <section className="flex items-center justify-between gap-3 rounded-lg border border-line bg-white p-4 shadow-soft">
+                  <p className="text-sm text-muted">
+                    Showing image {imageIndex + 1} of {images.length}
+                    {images[imageIndex] ? ` — ${images[imageIndex].name}` : ""}
+                  </p>
+                  {imageIndex < images.length - 1 ? (
+                    <button
+                      type="button"
+                      className="focus-ring inline-flex items-center gap-2 rounded-md bg-teal px-4 py-2 text-sm font-semibold text-white hover:bg-[#066b67] disabled:cursor-not-allowed disabled:opacity-60"
+                      disabled={isPending}
+                      onClick={() => submitWithTransition(runNextImage)}
+                    >
+                      {isPending ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
+                      Next image
+                    </button>
+                  ) : (
+                    <span className="text-sm font-medium text-teal">All images done</span>
+                  )}
+                </section>
+              ) : null}
             </div>
 
             <div className="space-y-5">
@@ -574,12 +629,20 @@ function ImageInputField({
   images,
   fileInputRef,
   onAdd,
-  onRemove
+  onRemove,
+  sequential,
+  onToggleSequential,
+  sequentialActive,
+  currentIndex
 }: {
   images: ImageAttachment[];
   fileInputRef: React.RefObject<HTMLInputElement | null>;
   onAdd: (files: FileList | null) => void;
   onRemove: (index: number) => void;
+  sequential: boolean;
+  onToggleSequential: (value: boolean) => void;
+  sequentialActive: boolean;
+  currentIndex: number;
 }) {
   return (
     <div>
@@ -610,25 +673,42 @@ function ImageInputField({
         Add image
       </button>
 
+      {images.length > 1 ? (
+        <label className="mt-3 flex items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            className="h-4 w-4 rounded border-line text-teal focus-ring"
+            checked={sequential}
+            onChange={(event) => onToggleSequential(event.target.checked)}
+          />
+          <span>Process images one at a time</span>
+        </label>
+      ) : null}
+
       {images.length > 0 ? (
         <div className="mt-3 flex flex-wrap gap-3">
-          {images.map((image, index) => (
-            <div
-              key={`${image.name}-${index}`}
-              className="relative h-20 w-20 overflow-hidden rounded-md border border-line"
-            >
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
-              <button
-                type="button"
-                aria-label={`Remove ${image.name}`}
-                className="focus-ring absolute right-1 top-1 rounded-full bg-ink/80 p-0.5 text-white hover:bg-ink"
-                onClick={() => onRemove(index)}
+          {images.map((image, index) => {
+            const isCurrent = sequentialActive && index === currentIndex;
+            return (
+              <div
+                key={`${image.name}-${index}`}
+                className={`relative h-20 w-20 overflow-hidden rounded-md border ${
+                  isCurrent ? "border-teal ring-2 ring-teal" : "border-line"
+                }`}
               >
-                <X size={12} />
-              </button>
-            </div>
-          ))}
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={image.dataUrl} alt={image.name} className="h-full w-full object-cover" />
+                <button
+                  type="button"
+                  aria-label={`Remove ${image.name}`}
+                  className="focus-ring absolute right-1 top-1 rounded-full bg-ink/80 p-0.5 text-white hover:bg-ink"
+                  onClick={() => onRemove(index)}
+                >
+                  <X size={12} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </div>
