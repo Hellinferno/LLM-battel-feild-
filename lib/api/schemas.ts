@@ -25,8 +25,8 @@ export const benchmarkRunCreateSchema = z
     systemInstruction: z.string().trim().max(5000).nullable().optional(),
     settings: z.object({
       temperature: z.number().min(0).max(2).optional(),
-      maxOutputTokens: z.number().int().min(1).max(32000).optional(),
-      timeoutMs: z.number().int().min(1000).max(180000).default(60000)
+      maxOutputTokens: z.number().int().min(1).optional(),
+      timeoutMs: z.number().int().min(1000).default(300000)
     }),
     models: z
       .array(
@@ -38,7 +38,6 @@ export const benchmarkRunCreateSchema = z
         })
       )
       .min(1)
-      .max(20)
   })
   .refine((value) => value.prompt.length > 0 || value.images.length > 0, {
     message: "Provide a prompt, an image, or both.",

@@ -68,12 +68,15 @@ const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
 const MAX_IMAGES = 8;
 const MAX_DOCUMENTS = 5;
 
-// Fixed run settings — the form no longer exposes these controls.
+// Default run settings, used to seed the form controls.
 // Output budget is generous so full question papers aren't truncated mid-answer.
 // Pro-class reasoning models (e.g. gemini-2.5-pro) spend a large share of the
 // output budget on internal thinking tokens before any visible text, so we
 // allocate generously to leave room for the actual answer.
-const DEFAULT_RUN_SETTINGS = { maxOutputTokens: 16000, timeoutMs: 60000 };
+// The timeout is generous (5 min) so slow models still return their output
+// instead of being aborted and shown as a timeout.
+const DEFAULT_MAX_TOKENS = 16000;
+const DEFAULT_TIMEOUT_MS = 300000;
 
 // Sent as the system instruction on every run so each model finishes with a
 // machine-parseable answer block that powers the "Final answer" results column.
@@ -139,6 +142,10 @@ export function BattleApp() {
   });
   const [providerForm, setProviderForm] = useState<ProviderForm>(initialProviderForm);
   const [prompt, setPrompt] = useState("Explain vector databases to a product manager.");
+  const [systemInstruction, setSystemInstruction] = useState("Be clear, concise, and practical.");
+  const [temperature, setTemperature] = useState(0.4);
+  const [maxTokens, setMaxTokens] = useState(DEFAULT_MAX_TOKENS);
+  const [timeoutMs, setTimeoutMs] = useState(DEFAULT_TIMEOUT_MS);
   const [images, setImages] = useState<ImageAttachment[]>([]);
   const [sequentialImages, setSequentialImages] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
@@ -386,8 +393,12 @@ export function BattleApp() {
       body: JSON.stringify({
         prompt: buildEffectivePrompt(prompt, documents),
         images: imagesToSend.map(({ mimeType, data }) => ({ mimeType, data })),
-        systemInstruction: ANSWER_INSTRUCTION,
-        settings: DEFAULT_RUN_SETTINGS,
+        systemInstruction: systemInstruction ? `${systemInstruction}\n\n${ANSWER_INSTRUCTION}` : ANSWER_INSTRUCTION,
+        settings: {
+          temperature,
+          maxOutputTokens: maxTokens,
+          timeoutMs
+        },
         models: selectedModels
       })
     });
@@ -533,6 +544,45 @@ export function BattleApp() {
                       onChange={(event) => setPrompt(event.target.value)}
                     />
                   </label>
+
+                  <div className="grid gap-4 sm:grid-cols-3 rounded-md border border-line p-4 bg-wash">
+                    <label className="block sm:col-span-3">
+                      <span className="text-sm font-medium">System instruction</span>
+                      <textarea
+                        className="focus-ring mt-2 min-h-16 w-full resize-y rounded-md border border-line px-3 py-3 text-sm leading-6"
+                        value={systemInstruction}
+                        onChange={(event) => setSystemInstruction(event.target.value)}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-medium">Temperature</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
+                        value={temperature}
+                        onChange={(event) => setTemperature(parseFloat(event.target.value))}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-medium">Max tokens</span>
+                      <input
+                        type="number"
+                        className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
+                        value={maxTokens}
+                        onChange={(event) => setMaxTokens(parseInt(event.target.value, 10))}
+                      />
+                    </label>
+                    <label className="block">
+                      <span className="text-sm font-medium">Timeout ms</span>
+                      <input
+                        type="number"
+                        className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
+                        value={timeoutMs}
+                        onChange={(event) => setTimeoutMs(parseInt(event.target.value, 10))}
+                      />
+                    </label>
+                  </div>
 
                   <ImageInputField
                     images={images}

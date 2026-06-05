@@ -7,6 +7,9 @@ import { executeBenchmarkRun, validateBenchmarkKeys } from "@/lib/benchmark/engi
 import { prisma } from "@/lib/db/client";
 
 export const runtime = "nodejs";
+// Allow slow models to finish before the platform kills the function. The app's
+// own per-provider timeout (settings.timeoutMs) is the real cutoff.
+export const maxDuration = 300;
 
 export async function GET(request: Request) {
   try {
