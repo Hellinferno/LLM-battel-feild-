@@ -76,7 +76,9 @@ const MAX_DOCUMENTS = 5;
 // The timeout is generous (5 min) so slow models still return their output
 // instead of being aborted and shown as a timeout.
 const DEFAULT_MAX_TOKENS = 16000;
-const DEFAULT_TIMEOUT_MS = 300000;
+// Kept under the server-side timeout cap (285s) which itself sits below the
+// route's maxDuration (300s).
+const DEFAULT_TIMEOUT_MS = 280000;
 
 // Sent as the system instruction on every run so each model finishes with a
 // machine-parseable answer block that powers the "Final answer" results column.

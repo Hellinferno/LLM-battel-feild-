@@ -25,8 +25,11 @@ export const benchmarkRunCreateSchema = z
     systemInstruction: z.string().trim().max(5000).nullable().optional(),
     settings: z.object({
       temperature: z.number().min(0).max(2).optional(),
-      maxOutputTokens: z.number().int().min(1).optional(),
-      timeoutMs: z.number().int().min(1000).default(300000)
+      maxOutputTokens: z.number().int().min(1).max(32000).optional(),
+      // Server-owned deadline. Capped below the route's maxDuration (300s) with
+      // headroom for the per-result DB writes and JSON encoding, so a slow run
+      // finishes before the platform kills the function.
+      timeoutMs: z.number().int().min(1000).max(285000).default(280000)
     }),
     models: z
       .array(
@@ -37,7 +40,10 @@ export const benchmarkRunCreateSchema = z
           baseUrl: z.string().url().nullable().optional()
         })
       )
+      // Bounds fan-out: providers run in parallel, so this caps concurrent
+      // outbound requests and DB writes per run.
       .min(1)
+      .max(20)
   })
   .refine((value) => value.prompt.length > 0 || value.images.length > 0, {
     message: "Provide a prompt, an image, or both.",
