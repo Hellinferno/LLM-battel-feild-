@@ -67,18 +67,26 @@ type ImageAttachment = {
 const ACCEPTED_IMAGE_TYPES = "image/png,image/jpeg,image/webp,image/gif";
 const MAX_IMAGES = 8;
 const MAX_DOCUMENTS = 5;
+// Longest edge we downscale images to before sending. Matches the input limit of
+// the major vision models, so we lose no useful detail.
+const MAX_IMAGE_DIMENSION = 1568;
+// Per-image base64 ceiling after compression. Kept well under Vercel's ~4.5 MB
+// serverless request-body limit so several images plus the prompt still fit in
+// one POST. Larger inputs were silently 400'd by the server before this.
+const MAX_IMAGE_BASE64_BYTES = 3_500_000;
 
 // Default run settings, used to seed the form controls.
 // Output budget is generous so full question papers aren't truncated mid-answer.
 // Pro-class reasoning models (e.g. gemini-2.5-pro) spend a large share of the
 // output budget on internal thinking tokens before any visible text, so we
 // allocate generously to leave room for the actual answer.
-// The timeout is generous (5 min) so slow models still return their output
-// instead of being aborted and shown as a timeout.
 const DEFAULT_MAX_TOKENS = 16000;
-// Kept under the server-side timeout cap (285s) which itself sits below the
-// route's maxDuration (300s).
+// Per-provider deadline. Render runs a persistent Node server with no per-request
+// kill (unlike Vercel's 60s serverless limit), so this is generous (~4.7 min) to
+// let slow reasoning models return their full output instead of being aborted.
 const DEFAULT_TIMEOUT_MS = 280000;
+// Ceiling for the timeout form control.
+const MAX_TIMEOUT_MS = 285000;
 
 // Sent as the system instruction on every run so each model finishes with a
 // machine-parseable answer block that powers the "Final answer" results column.
@@ -123,17 +131,67 @@ function extractFinalAnswer(output: string | null): string | null {
   return tail.length > 0 ? tail : null;
 }
 
-function readImageFile(file: File): Promise<ImageAttachment> {
+function loadImageElement(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const dataUrl = String(reader.result);
-      const data = dataUrl.includes(",") ? dataUrl.slice(dataUrl.indexOf(",") + 1) : dataUrl;
-      resolve({ name: file.name, mimeType: file.type, data, dataUrl });
-    };
-    reader.onerror = () => reject(new Error(`Could not read ${file.name}.`));
-    reader.readAsDataURL(file);
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("The browser could not decode this image."));
+    img.src = src;
   });
+}
+
+/**
+ * Decode, downscale, and re-encode an image to JPEG so the payload stays under
+ * the server/Vercel body limits. Always normalises to image/jpeg, which every
+ * provider accepts, sidestepping unsupported source types (HEIC, BMP, etc.).
+ */
+async function compressImage(file: File): Promise<ImageAttachment> {
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    const img = await loadImageElement(objectUrl);
+    const longest = Math.max(img.naturalWidth, img.naturalHeight) || 1;
+    const scale = Math.min(1, MAX_IMAGE_DIMENSION / longest);
+    const width = Math.max(1, Math.round(img.naturalWidth * scale));
+    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      throw new Error("Canvas is not supported in this browser.");
+    }
+    ctx.drawImage(img, 0, 0, width, height);
+
+    // Step the JPEG quality down until the encoded payload fits the ceiling.
+    let quality = 0.85;
+    let dataUrl = canvas.toDataURL("image/jpeg", quality);
+    while (base64Length(dataUrl) > MAX_IMAGE_BASE64_BYTES && quality > 0.4) {
+      quality -= 0.15;
+      dataUrl = canvas.toDataURL("image/jpeg", quality);
+    }
+
+    const data = dataUrl.slice(dataUrl.indexOf(",") + 1);
+    return { name: file.name, mimeType: "image/jpeg", data, dataUrl };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+function base64Length(dataUrl: string): number {
+  return dataUrl.length - (dataUrl.indexOf(",") + 1);
+}
+
+/** Parse a numeric input, falling back to `fallback` for empty/NaN values so we
+ * never put NaN into state (which serialises to null and trips server validation). */
+function numberOr(value: string, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 export function BattleApp() {
@@ -335,17 +393,36 @@ export function BattleApp() {
       return;
     }
     setMessage(null);
-    try {
-      const loaded = await Promise.all(Array.from(fileList).map(readImageFile));
+    const loaded: ImageAttachment[] = [];
+    const skipped: string[] = [];
+
+    for (const file of Array.from(fileList)) {
+      if (!file.type.startsWith("image/")) {
+        skipped.push(`${file.name} (not an image)`);
+        continue;
+      }
+      try {
+        const image = await compressImage(file);
+        if (base64Length(image.dataUrl) > MAX_IMAGE_BASE64_BYTES) {
+          skipped.push(`${file.name} (too large even after compression)`);
+          continue;
+        }
+        loaded.push(image);
+      } catch (error) {
+        skipped.push(`${file.name} (${readError(error)})`);
+      }
+    }
+
+    if (loaded.length > 0) {
       setImages((current) => [...current, ...loaded].slice(0, MAX_IMAGES));
       setImageIndex(0);
       setSequentialActive(false);
-    } catch (error) {
-      setMessage(readError(error));
-    } finally {
-      if (fileInputRef.current) {
-        fileInputRef.current.value = "";
-      }
+    }
+    if (skipped.length > 0) {
+      setMessage(`Skipped ${skipped.length} image(s): ${skipped.join(", ")}.`);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
     }
   }
 
@@ -397,9 +474,10 @@ export function BattleApp() {
         images: imagesToSend.map(({ mimeType, data }) => ({ mimeType, data })),
         systemInstruction: systemInstruction ? `${systemInstruction}\n\n${ANSWER_INSTRUCTION}` : ANSWER_INSTRUCTION,
         settings: {
-          temperature,
-          maxOutputTokens: maxTokens,
-          timeoutMs
+          // Clamp to the server schema bounds so an out-of-range value can't 400.
+          temperature: clamp(temperature, 0, 2),
+          maxOutputTokens: Math.round(clamp(maxTokens, 1, 32000)),
+          timeoutMs: Math.round(clamp(timeoutMs, 1000, MAX_TIMEOUT_MS))
         },
         models: selectedModels
       })
@@ -512,7 +590,7 @@ export function BattleApp() {
           </header>
 
           {message ? (
-            <div className="mb-4 rounded-md border border-line bg-white px-4 py-3 text-sm text-ink shadow-sm">
+            <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 shadow-sm">
               {message}
             </div>
           ) : null}
@@ -563,7 +641,7 @@ export function BattleApp() {
                         step="0.1"
                         className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
                         value={temperature}
-                        onChange={(event) => setTemperature(parseFloat(event.target.value))}
+                        onChange={(event) => setTemperature(numberOr(event.target.value, 0))}
                       />
                     </label>
                     <label className="block">
@@ -572,7 +650,7 @@ export function BattleApp() {
                         type="number"
                         className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
                         value={maxTokens}
-                        onChange={(event) => setMaxTokens(parseInt(event.target.value, 10))}
+                        onChange={(event) => setMaxTokens(numberOr(event.target.value, DEFAULT_MAX_TOKENS))}
                       />
                     </label>
                     <label className="block">
@@ -581,7 +659,7 @@ export function BattleApp() {
                         type="number"
                         className="focus-ring mt-2 w-full rounded-md border border-line px-3 py-2 text-sm"
                         value={timeoutMs}
-                        onChange={(event) => setTimeoutMs(parseInt(event.target.value, 10))}
+                        onChange={(event) => setTimeoutMs(numberOr(event.target.value, DEFAULT_TIMEOUT_MS))}
                       />
                     </label>
                   </div>
@@ -616,6 +694,7 @@ export function BattleApp() {
                   />
 
                   <button
+                    type="submit"
                     className="focus-ring inline-flex items-center gap-2 rounded-md bg-teal px-4 py-2 text-sm font-semibold text-white hover:bg-[#066b67] disabled:cursor-not-allowed disabled:opacity-60"
                     disabled={
                       isPending ||
@@ -629,6 +708,10 @@ export function BattleApp() {
                     {isPending ? <Loader2 className="animate-spin" size={16} /> : <Play size={16} />}
                     Run comparison
                   </button>
+
+                  {message ? (
+                    <p className="mt-2 text-sm text-amber-700">{message}</p>
+                  ) : null}
                 </form>
               </section>
 

@@ -1,0 +1,26 @@
+# Render Blueprint — deploys the whole Next.js app (UI + API) as one persistent
+# Node web service, so LLM runs are not subject to Vercel's 60s function kill.
+# In Render: New > Blueprint > pick this repo, then fill in the secret env vars.
+services:
+  - type: web
+    name: llm-battle
+    runtime: node
+    plan: free # change to "starter" ($7/mo) to avoid cold-start spin-down
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      # Neon pooled connection string (used at runtime by the app).
+      - key: DATABASE_URL
+        sync: false
+      # Neon direct/unpooled connection string (used by `prisma db push` at build).
+      - key: DATABASE_URL_UNPOOLED
+        sync: false
+      # 32-byte base64 key used to encrypt provider API keys at rest.
+      - key: APP_ENCRYPTION_KEY
+        sync: false
+      # Set this to the live Render URL after the first deploy, then redeploy
+      # (it is baked into the client bundle at build time).
+      - key: NEXT_PUBLIC_APP_URL
+        sync: false
+      - key: NODE_VERSION
+        value: "20"

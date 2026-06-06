@@ -14,8 +14,10 @@ export const imageInputSchema = z.object({
   mimeType: z
     .string()
     .regex(/^image\/(png|jpe?g|webp|gif)$/, "Unsupported image type."),
-  // Base64 payload (no data: prefix). ~20MB ceiling on the encoded string.
-  data: z.string().min(1).max(20_000_000)
+  // Base64 payload (no data: prefix). The client downscales/compresses images
+  // below this; the cap is kept under Vercel's ~4.5MB request-body limit so a
+  // run with several images plus the prompt still fits in one POST.
+  data: z.string().min(1).max(4_000_000)
 });
 
 export const benchmarkRunCreateSchema = z
@@ -26,9 +28,8 @@ export const benchmarkRunCreateSchema = z
     settings: z.object({
       temperature: z.number().min(0).max(2).optional(),
       maxOutputTokens: z.number().int().min(1).max(32000).optional(),
-      // Server-owned deadline. Capped below the route's maxDuration (300s) with
-      // headroom for the per-result DB writes and JSON encoding, so a slow run
-      // finishes before the platform kills the function.
+      // Server-owned per-provider deadline. Render has no per-request kill, so the
+      // cap is generous; it is the real cutoff for a slow model.
       timeoutMs: z.number().int().min(1000).max(285000).default(280000)
     }),
     models: z

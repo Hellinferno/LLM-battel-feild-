@@ -7,8 +7,10 @@ import { executeBenchmarkRun, validateBenchmarkKeys } from "@/lib/benchmark/engi
 import { prisma } from "@/lib/db/client";
 
 export const runtime = "nodejs";
-// Allow slow models to finish before the platform kills the function. The app's
-// own per-provider timeout (settings.timeoutMs) is the real cutoff.
+// On Render (persistent Node server) there is no per-request kill, so the real
+// cutoff is the app's own per-provider timeout (settings.timeoutMs, default
+// ~280s). This export is a Vercel-only hint and is ignored by Render; kept for
+// portability if ever deployed to Vercel Pro.
 export const maxDuration = 300;
 
 export async function GET(request: Request) {
